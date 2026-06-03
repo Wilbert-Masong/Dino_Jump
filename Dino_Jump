@@ -1,0 +1,975 @@
+import pygame, random, sys, math
+import tempfile, wave, os 
+pygame.init()
+
+
+import numpy as np
+pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=512)
+# Add this after pygame.mixer.init(...)
+
+def make_beep(freq=440, duration=0.1, volume=0.3):
+    sample_rate = 44100
+    frames = int(sample_rate * duration)
+    t = np.linspace(0, duration, frames, False)
+    wave = (np.sin(2 * np.pi * freq * t) * volume * 32767).astype(np.int16)
+    wave = np.column_stack([wave, wave])
+    return pygame.sndarray.make_sound(wave)
+
+def make_note(freq, duration, volume=0.3):   # ← ADD this function
+    sample_rate = 44100
+    frames = int(sample_rate * duration)
+    t = np.linspace(0, duration, frames, False)
+    wave_data = (np.sin(2 * np.pi * freq * t) * volume * 32767).astype(np.int16)
+    return np.column_stack([wave_data, wave_data])
+
+def make_theme():
+    # Mario theme notes (freq, duration)
+    E5, C5, G4, A4, B4 = 659, 523, 392, 440, 494
+    F5, D5, Gs4        = 698, 587, 415
+    notes = [
+        (E5,0.15),(E5,0.15),(0,0.15),(E5,0.15),(0,0.15),(C5,0.15),(E5,0.30),
+        (G4,0.30),(0,0.30),(C5,0.30),(0,0.15),(G4,0.30),(0,0.30),
+        (E5,0.30),(0,0.15),(A4,0.30),(B4,0.15),(0,0.10),(Gs4,0.15),
+        (A4,0.30),(F5,0.20),(G4,0.15),(0,0.10),(E5,0.30),
+        (C5,0.20),(D5,0.15),(B4,0.25),(0,0.20),
+    ]
+    chunks = []
+    for freq, dur in notes:
+        if freq == 0:
+            silence = np.zeros((int(44100*dur), 2), dtype=np.int16)
+            chunks.append(silence)
+        else:
+            chunks.append(make_note(freq, dur))
+    return np.concatenate(chunks)
+
+def save_wav(data, filename):
+    with wave.open(filename, 'w') as wf:
+        wf.setnchannels(2)
+        wf.setsampwidth(2)
+        wf.setframerate(44100)
+        wf.writeframes(data.tobytes())
+
+theme_data = make_theme()
+theme_file = os.path.join(tempfile.gettempdir(), "mario_theme.wav")
+save_wav(theme_data, theme_file)
+
+pygame.mixer.music.load(theme_file)
+pygame.mixer.music.set_volume(0.4)
+pygame.mixer.music.play(-1)
+
+
+sfx_jump2  = make_beep(freq=1046, duration=0.10, volume=0.3)
+sfx_jump = make_beep(freq=784, duration=0.10, volume=0.25)  # double jump (lower pitch)
+sfx_coin = make_beep(freq=1319, duration=0.35, volume=0.4)
+sfx_land  = make_beep(freq=200, duration=0.07, volume=0.15)
+sfx_milestone = make_beep(freq=1568, duration=0.35, volume=0.4)
+sfx_death = [
+    make_beep(freq=440, duration=0.2, volume=0.4),   # A4
+    make_beep(freq=349, duration=0.2, volume=0.35),  # F4
+    make_beep(freq=220, duration=0.3, volume=0.3)    # A3
+]
+
+W, H   = 900, 400
+screen = pygame.display.set_mode((W, H))
+pygame.display.set_caption("Mario Runner")
+clock  = pygame.time.Clock()
+
+SKY_DAY   = (92,  148, 252)
+SKY_NIGHT = (8,   8,   32)
+GROUND_BR = (174, 100, 28)
+GROUND_DK = (120, 60,  8)
+GROUND_LT = (220, 148, 72)
+GRASS_C   = (0,   168, 0)
+HILL_C    = (0,   144, 0)
+HILL_T    = (0,   168, 0)
+HILL_D    = (0,   104, 0)
+CLOUD_W   = (252, 252, 252)
+CLOUD_SH  = (196, 208, 228)
+STAR_C    = (252, 228, 52)
+MOON_C    = (252, 244, 172)
+COIN_Y    = (252, 212, 0)
+COIN_D    = (196, 156, 0)
+BLACK     = (0,   0,   0)
+WHITE     = (252, 252, 252)
+SCORE_SH  = (16,  16,  56)
+FLASH_C   = (252, 48,  48)
+
+MR  = (200, 16,  16)
+MK  = (228, 148, 60)
+MB  = (120, 60,  0)
+MO  = (0,   72,  200)
+MDR = (0,   40,  140)
+
+GC  = (172, 92,  24)
+GL  = (220, 136, 68)
+GD  = (100, 44,  4)
+GF  = (80,  32,  4)
+GE  = (252, 252, 252)
+GP  = (0,   0,   0)
+
+PC  = (0,   168, 0)
+PD  = (0,   104, 0)
+PL  = (128, 220, 72)
+PLL = (168, 252, 104)
+PBK = (0,   0,   0)
+
+PP_GR  = (0,   128, 0)
+PP_LG  = (0,   200, 0)
+PP_WHT = (252, 252, 252)
+PP_STM = (0,   148, 0)
+PP_SDW = (0,   96,  0)
+PP_RED = (220, 32,  32)
+PP_DRD = (160, 16,  16)
+
+KG  = (0,   168, 0)
+KGL = (0,   220, 80)
+KGD = (0,   80,  0)
+KY  = (252, 212, 0)
+KBK = (0,   0,   0)
+KW  = (252, 252, 252)
+
+GROUND_Y = H - 72
+FPS      = 60
+GRAVITY  = 0.85
+JUMP_V   = -17
+DUCK_H   = 26
+
+font_big = pygame.font.SysFont("monospace", 36, bold=True)
+font_med = pygame.font.SysFont("monospace", 20, bold=True)
+font_sm  = pygame.font.SysFont("monospace", 14, bold=True)
+
+def p(surf, col, x, y, w=1, h=1):
+    if col and w > 0 and h > 0:
+        pygame.draw.rect(surf, col, (int(x), int(y), int(w), int(h)))
+
+def _pix(surf, data, bx, by, cmap, scale=None):
+    sc = scale if scale else S
+    for ry, row in enumerate(data):
+        for rx, ch in enumerate(row):
+            col = cmap.get(ch)
+            if col is not None:
+                p(surf, col, bx + rx*sc, by + ry*sc, sc, sc)
+
+S = 4
+
+MC = {
+    'R': MR, 'K': MK, 'B': MB, 'O': MO,
+    'W': (252,252,252), '.': None, 'X': BLACK,
+    'Y': (255, 255, 0)   # Yellow
+}
+
+STAND = [
+    "................",
+    ".....RRRRR......",
+    "....RRRRRRRRR...",
+    "....BBBKKBK.....",
+    "...BKBKKKBKKK...",
+    "...BKBBKKKBKKK..",
+    "...BBKKKKBBBB...",
+    ".....KKKKKKK....",
+    "..RRRRORRRO.....",
+    "KKRRRROORRRORKKK",
+    "KKK.RROOOOOORRKK",
+    "KK..OOOYOOOY..R.",
+    "...OOOOOOOOOORR.",
+    "..OOOOOOOOOOORR.",
+    ".RROOO....OOORR.",
+    ".RRR............",
+    "..RRR...........",
+]
+RUN1 = [
+    "...RRRRR....",
+    "..RRRRRRRRR.",
+    "..BBBKKBK...",
+    ".BKBKKKBKKK.",
+    ".BKBBKKKBKKK",
+    ".BBKKKKBBBB.",
+    "...KKKKKKK..",
+    "....RROOR...",
+    "...RRRRORKK.",
+    ".KKRRRRRRKKK",
+    "KKKORRRRRKK.",
+    ".RROOOOOOO..",
+    ".ROOOOOOOO..",
+    "RR....OOO...",
+    "R....RRR....",
+    "......RRR...",
+]
+RUN2 = [
+    "...........",
+    "..RRRRR....",
+    ".RRRRRRRRR.",
+    ".BBBKKBK...",
+    "BKBKKKBKKK.",
+    "BKBBKKKBKKK",
+    "BBKKKKBBBB.",
+    "..KKKKKKK..",
+    ".RRRORR....",
+    "RRRROORR...",
+    "RRRROYRR...",
+    "RRROOOOO...",
+    "RRRROOOO...",
+    "ORRKKOOO...",
+    ".ORKKOO....",
+    "..OOORRR...",
+    "..RRRR.....",
+]
+RUN3 = [
+    "...RRRRR....",
+    "..RRRRRRRRR.",
+    "..BBBKKBK...",
+    ".BKBKKKBKKK.",
+    ".BKBBKKKBKKK",
+    ".BBKKKKBBBB.",
+    "...KKKKKKK..",
+    "....RROOR...",
+    "...RRRRORKK.",
+    ".KKRRRRRRKKK",
+    "KKKORRRRRKK.",
+    ".RROOOOOOO..",
+    ".ROOOOOOOO..",
+    "RR....OOO...",
+    "R....RRR....",
+    "......RRR...",
+]
+JUMP = [
+    ".............KKK",
+    "......RRRRR..KKK",
+    ".....RRRRRRRRRKK",
+    ".....BBBKKBK.RRR",
+    "....BKBKKKBKKKRR",
+    "....BKBBKKKBKKKR",
+    "....BBKKKKBBBBR.",
+    "......KKKKKKKR..",
+    "..RRRRRORRROR...",
+    ".RRRRRRRORRRO..R",
+    "KKRRRRROOOOOO..R",
+    "KKK.OOROOYOOYORR",
+    ".K.ROOOOOOOOOORR",
+    "..RRROOOOOOOOORR",
+    ".RRROOOOOOO.....",
+    ".R..OOOO........",
+]
+DUCK = [
+    "..............",
+    "..............",
+    "..............",
+    "....RRRRR.....",
+    "...RRRRRRRRR..",
+    "...BBBKKBK....",
+    "..BKBKKKBKKK..",
+    "..BKBBKKKBKKK.",
+    "..BBKKKKBBBB..",
+    ".RROKKKKKKKRR.",
+    "RRRROORRRORRRR",
+    "RKKROOOOOORKKR",
+    "RKKKOYOOYOKKKR",
+    ".KKOOOOOOOOKK.",
+    ".RRROOOOOORRR.",
+    "RRRR......RRRR",
+]
+
+def draw_mario(surf, x, y, ducking, airborne, frame):
+    if ducking:
+        _pix(surf, DUCK, x, y, MC)
+    elif airborne:
+        _pix(surf, JUMP, x, y, MC)
+    else:
+        f = (frame // 5) % 4
+        _pix(surf, [STAND, RUN1, RUN2, RUN3][f], x, y, MC)
+
+def mario_rect(x, y, ducking):
+    if ducking:
+        return pygame.Rect(x + 1*S, y + S, 9*S, 11*S)
+    return pygame.Rect(x + 1*S, y + S, 9*S, 14*S)
+
+# ── GOOMBA ────────────────────────────────────────────────────
+GS = 3
+GOOMBA_MAP = {
+    'D': (100,44,4), 'C': (172,92,24), 'L': (210,130,55),
+    'T': (224,172,100), 'B': (0,0,0), 'W': (252,252,252),
+    'F': (80,32,4), 'E': (200,60,10), '.': None
+}
+GOOMBA_BODY = [
+    "......CCCCC.......",
+    ".....CCLLCCC......",
+    "....CCLLCCLCC.....",
+    "...CCLCCCCCCCC....",
+    "..CLCCCCCCCCCCC..",
+    ".CBBCCCCCCCCCBBC.",
+    ".CLCBCCCCCCCBCCC.",
+    "CCCCWBCCCCCBWCCCC",
+    "CCCCWBBBBBBBWCCCC",
+    "CCCCWBWCCCWBWCCCC",
+    "CCCCWWWCCCWWWCCCC",
+    "CCCCCCCCCCCCCCCCD",
+    ".CCCDLLLLLLLCCDD.",
+    "...DDTTTTTTLDD...",
+    "....TTTTTTTTL....",
+    "....TTTTTTTLL....",
+]
+GOOMBA_FEET_A = ["....FFFFLL.......", "...FFFFFLLFFFF...", "...FFFFF..FFFF...",]
+GOOMBA_FEET_B = [".......TTFFFF....", "...FFFFTTFFFFF...", "...FFFFTTFFFFF...",]
+
+def draw_goomba(surf, x, y, frame):
+    bx, by = int(x), int(y)
+    f = (frame // 8) % 2
+    _pix(surf, GOOMBA_BODY, bx, by, GOOMBA_MAP, GS)
+    fy = by + len(GOOMBA_BODY) * GS
+    feet = GOOMBA_FEET_A if f == 0 else GOOMBA_FEET_B
+    for ri, row in enumerate(feet):
+        for ci, ch in enumerate(row):
+            if ch == 'F':
+                p(surf, (80,32,4), bx+ci*GS, fy+ri*GS, GS, GS)
+
+def goomba_rect(x, y):
+    return pygame.Rect(int(x)+GS*2, int(y)+GS*2, GS*11, GS*17)
+
+# ── KOOPA ─────────────────────────────────────────────────────
+KSC = 3
+KSK=(220,140,40); KSH=(0,160,0); KSD=(0,90,0); KSL=(80,220,80)
+KBK=(0,0,0); KWH=(252,252,252); KYL=(252,220,0)
+KOOPA_MAP = {'S':KSK,'G':KSH,'D':KSD,'L':KSL,'B':KBK,'W':KWH,'Y':KYL,'.':None}
+KOOPA_A = [
+    "...BBBBBBBB...","..BDLLLLLGBB..","..BLDLGGGBGGB.",
+    ".BLLGBBBBGDGGB.",".BLLBGGGGBGGDB",".BLDGBBBBGBGDB.",
+    ".BDGBGGGGBGBDB.","BWWWWWWWWWWWWWB","BWWWWWWWWWWWWWB",
+    ".BYYYYYYYBYYYB.","..BYYYYYBYYYB..","...BBBBB.BBBB..",
+]
+KOOPA_B = [
+    "...BBBBBBBB...","..BDLLLLLGBB..","..BLDLGGGBGGB.",
+    ".BLLGBBBBGDGGB.",".BLLBGGGGBGGDB",".BLDGBBBBGBGDB.",
+    ".BDGBGGGGBGBDB.","BWWWWWWWWWWWWWB","BWWWWWWWWWWWWWB",
+    ".BYYYBYYYYYYYB.","..BYYYBYYYYYB..","...BBB.BBBBB...",
+]
+def draw_koopa(surf, x, y, frame):
+    bx, by = int(x), int(y)
+    _pix(surf, KOOPA_A if (frame//9)%2==0 else KOOPA_B, bx, by, KOOPA_MAP, KSC)
+def koopa_rect(x, y):
+    return pygame.Rect(int(x)+KSC*2, int(y)+KSC*1, KSC*10, KSC*11)
+
+# ── PIPE ──────────────────────────────────────────────────────
+PIPE_DEFS = {
+    (0,0):(24,6,52),(0,1):(24,6,84),
+    (1,0):(36,8,58),(1,1):(36,8,96),
+    (2,0):(52,10,62),(2,1):(52,10,100),
+}
+def draw_pipe(surf, x, wc, hc):
+    bw,ce,bh=PIPE_DEFS[(wc,hc)]; cw=bw+ce*2; ch=20; bx=x+ce; top=GROUND_Y-bh; cy=top-ch
+    p(surf,PBK,bx,top,bw,bh); p(surf,PD,bx+1,top,max(4,bw//6),bh)
+    p(surf,PC,bx+max(4,bw//6)+1,top,bw-max(4,bw//6)-5,bh)
+    lsw=max(3,bw//8); p(surf,PL,bx+max(4,bw//6)+2,top,lsw,bh)
+    p(surf,PLL,bx+max(4,bw//6)+3,top,max(1,lsw-2),bh)
+    col_w=max(2,bw//10); toggle=False
+    for cx in range(bx+bw//2,bx+bw-1,col_w):
+        p(surf,PD if toggle else PC,cx,top,min(col_w,bx+bw-1-cx),bh); toggle=not toggle
+    p(surf,PBK,bx+bw-1,top,1,bh); p(surf,PBK,bx,top,1,bh)
+    p(surf,PBK,x,cy,cw,ch); p(surf,PD,x+1,cy+1,max(4,cw//8),ch-2)
+    p(surf,PC,x+max(4,cw//8)+1,cy+1,cw-max(4,cw//8)-5,ch-2)
+    lsw2=max(3,cw//10); p(surf,PL,x+max(4,cw//8)+2,cy+1,lsw2,ch-2)
+    p(surf,PLL,x+max(4,cw//8)+3,cy+1,max(1,lsw2-2),ch-2)
+    toggle2=False
+    for cx in range(x+cw//2,x+cw-1,col_w):
+        p(surf,PD if toggle2 else PC,cx,cy+1,min(col_w,x+cw-1-cx),ch-2); toggle2=not toggle2
+    p(surf,PBK,x+cw-1,cy,1,ch); p(surf,PBK,x,cy,cw,1); p(surf,PBK,x,cy+ch-1,cw,1)
+def pipe_rect(x, wc, hc):
+    bw,ce,bh=PIPE_DEFS[(wc,hc)]; cw=bw+ce*2
+    return pygame.Rect(x+1,GROUND_Y-bh-20,cw-2,bh+20)
+def pipe_cap_top(x, wc, hc):
+    bw,ce,bh=PIPE_DEFS[(wc,hc)]; return GROUND_Y-bh-20
+
+# ── PIRANHA ───────────────────────────────────────────────────
+PP_MAP = {
+    'G':PP_GR,'g':PP_SDW,'L':PP_LG,'W':PP_WHT,
+    'S':PP_STM,'D':PP_SDW,'.':None,
+    'B':BLACK,'b':BLACK,'R':PP_RED,'r':PP_DRD
+}
+PP_HEAD_OPEN = [
+    "......BWW.......WWB......",
+    "..BBBRRRW.......WRRRBB...",
+    ".BRRRRRRWW.....WWRRRRRBB.",
+    "BRWRRRRRRW.....WRRRRRRRRB",
+    "BRRRRRRRRWW...WWRRWRRRRrB",
+    "BRRRRRRWRRW...WRRRRRRRrrB",
+    "BRRRRRRRRRW...WRRRRRRrWrb",
+    "BRRWRRRRRRW...WRRRWrrrrrb",
+    "BRRRRRRRRRRW.WRRrrrrrrrb.",
+    "..BRRRRWRRWRWRrrrrrrrrb..",
+    "...Brrrrrrrrrrrrrrrrrb...",
+    ".....BrrWrrrrrrrrrWrb....",
+    ".......BBBBBBBBBBBB......",
+]
+PP_HEAD_CLOSED = [
+    ".........BWWWWB..........",
+    ".....BBBBRRWWRRBBBBB.....",
+    "...BBRRRRRWWWWRRRRRRBB...",
+    "..BWRRRRRRRWWRRRRRRRRRB..",
+    ".BRRRRRRRRWWWWRRWRRRRRRB.",
+    ".BRRRRRRWRRWWRRRRRRRRRrB.",
+    ".BRRRRRRRRRWWRRRRRRRrWrb.",
+    ".BRRWRRRRRRWWRRRWRRrrrrb.",
+    ".BRRRRRRRRRWWRRRRrrrrrrb.",
+    "..BRRRRrWrrWRRRrrrrrrrb..",
+    "...Brrrrrrrrrrrrrrrrrb...",
+    ".....BrrWrrrrrrrrrWrb....",
+    ".......BBBBBBBBBBBB......",
+]
+PP_STEM_DATA = [
+    ".....SSSS.....",
+    ".....SSSS.....",
+    ".....DDSS.....",
+    ".....DDSS.....",
+    ".ggS.DSSW.SSgg",
+    "..gSSDDSSSSSg.",
+    "...gSDDSSSgg..",
+    "....gDDSSg....",
+    ".....DDSS.....",
+    ".....DDSS.....",
+    ".....SSSS.....",
+    ".....SSSS.....",
+]
+def draw_piranha(surf, pipe_x, pipe_top, frame, pipe_wc, pipe_hc):
+    bob=int(5*math.sin(frame*0.055))
+    bw,ce,bh=PIPE_DEFS[(pipe_wc,pipe_hc)]
+    pipe_center=pipe_x+(bw+ce*2)//2
+    sc=2
+    head=PP_HEAD_OPEN if (frame//30)%2==0 else PP_HEAD_CLOSED
+    hw=len(head[0])*sc; hh=len(head)*sc; sh=len(PP_STEM_DATA)*sc
+    hx=pipe_center-hw//2; hy=pipe_top-hh-sh+bob
+    for ri,row in enumerate(head):
+        for ci,ch in enumerate(row):
+            col=PP_MAP.get(ch)
+            if col: p(surf,col,hx+ci*sc,hy+ri*sc,sc,sc)
+    sx=pipe_center-len(PP_STEM_DATA[0])*sc//2; sy=pipe_top-sh+bob
+    for ri,row in enumerate(PP_STEM_DATA):
+        for ci,ch in enumerate(row):
+            col=PP_MAP.get(ch)
+            if col: p(surf,col,sx+ci*sc,sy+ri*sc,sc,sc)
+def piranha_rect(pipe_x, pipe_top, frame, pipe_wc, pipe_hc):
+    bob=int(5*math.sin(frame*0.055))
+    bw,ce,bh=PIPE_DEFS[(pipe_wc,pipe_hc)]
+    pipe_center=pipe_x+(bw+ce*2)//2; sc=3
+    head=PP_HEAD_OPEN if (frame//30)%2==0 else PP_HEAD_CLOSED
+    hw=len(head[0])*sc; hh=len(head)*sc; sh=len(PP_STEM_DATA)*sc
+    hx=pipe_center-hw//2; hy=pipe_top-hh-sh+bob
+    return pygame.Rect(hx+sc*2,hy+sc,hw-sc*4,hh+sh-sc*2)
+
+# ── FLYING BRICKS ─────────────────────────────────────────────
+BW, BH = 26, 22
+BRICK_C=(176,88,24); BRICK_D=(120,48,4); BRICK_L=(220,144,68)
+
+def draw_flying_bricks(surf, x, y, count, collected_coins):
+    for i in range(count):
+        bx=x+i*BW
+        p(surf,BRICK_C,bx,y,BW,BH); p(surf,BRICK_L,bx,y,BW,3)
+        p(surf,BRICK_L,bx,y,3,BH); p(surf,BRICK_D,bx,y+BH-3,BW,3)
+        p(surf,BRICK_D,bx+BW-3,y,3,BH); p(surf,BRICK_D,bx+BW//2-1,y+3,2,BH-6)
+        p(surf,BRICK_D,bx+3,y+BH//2-1,BW-6,2)
+        p(surf,BLACK,bx,y,BW,1); p(surf,BLACK,bx,y,1,BH)
+        if not collected_coins[i]:
+            ccx=bx+BW//2; ccy=y-12
+            pygame.draw.circle(surf,COIN_Y,(ccx,ccy),8)
+            pygame.draw.circle(surf,COIN_D,(ccx+2,ccy),5)
+            p(surf,(255,240,100),ccx-2,ccy-4,3,3)
+
+def flying_bricks_rect(x, y, count):
+    return pygame.Rect(x+2,y+2,count*BW-4,BH-2)
+
+def coin_rect_at(x, y, i):
+    cx=x+i*BW+BW//2-8; cy=y-20
+    return pygame.Rect(cx,cy,16,20)
+
+# ── BULLET BILL ───────────────────────────────────────────────
+BB_SC = 3
+BB_MAP = {
+    'B': (16,16,16),'b': (48,48,48),'W': (252,252,252),
+    'G': (128,128,128),'D': (72,72,72),'S': (200,200,200),
+    'Y': (220,200,60),'F': (252,140,20),'f': (252,220,60),'.': None
+}
+BULLET_BILL_PIXELS = [
+    "......BBBBBB..BB",
+    "....BBBWWWWWBBWW",
+    "..BBBBWBBBBBBWBB",
+    ".BBBWBBBBBBBBBBB",
+    ".BBWWBBBBBBBBBBB",
+    "BWBWWBBBBBBBBBBB",
+    "BWWWBBBBBWWBBBBB",
+    "BBBBBBWWBWWWBBBB",
+    "BBBBBWWWWWWWBBBB",
+    ".BBBBWWWWWWBBBBB",
+    ".BBBBBWWWBBBBBBB",
+    "..BBBBBBBBBBBBBB",
+    "....BBBBBBBBBBBB",
+    "......BBBBBB..BB",
+]
+def draw_bullet_bill(surf, x, y):
+    bx,by=int(x),int(y)
+    _pix(surf,BULLET_BILL_PIXELS,bx,by,BB_MAP,BB_SC)
+    cx=bx+len(BULLET_BILL_PIXELS[0])*BB_SC
+    cy=by+len(BULLET_BILL_PIXELS)*BB_SC//2
+    import time; flicker=int(time.time()*20)%3
+    fw=22
+    for fi in range(fw-flicker*2):
+        fh=max(2,int((16-fi*0.3)*BB_SC//3))
+        fc=BB_MAP['f'] if fi<fw//3 else (BB_MAP['F'] if fi<fw*2//3 else (180,80,10))
+        p(surf,fc,cx+fi,cy-fh//2,2,fh)
+def bullet_bill_rect(x, y):
+    bw=len(BULLET_BILL_PIXELS[0])*BB_SC; bh=len(BULLET_BILL_PIXELS)*BB_SC
+    return pygame.Rect(int(x)+BB_SC,int(y)+BB_SC,bw-BB_SC*2,bh-BB_SC*2)
+def bullet_bill_height():
+    return len(BULLET_BILL_PIXELS)*BB_SC
+
+# ── ENVIRONMENT ───────────────────────────────────────────────
+def draw_ground(surf, offset):
+    p(surf,GRASS_C,0,GROUND_Y,W,8)
+    p(surf,(0,120,0),0,GROUND_Y+6,W,3)
+    p(surf,GROUND_BR,0,GROUND_Y+9,W,H-GROUND_Y)
+    step=36
+    off=offset%step                          # ← keep offset always within one tile
+    row_h=18
+    for ry in range(GROUND_Y+9,H,row_h):
+        ri=(ry-(GROUND_Y+9))//row_h
+        sh=(step//2) if ri%2==0 else 0
+        p(surf,GROUND_DK,0,ry,W,2)
+        for cx in range(-off+sh,W+step,step):
+            p(surf,GROUND_DK,cx,ry,2,row_h)
+        for cx in range(-off+sh+2,W+step,step):
+            p(surf,GROUND_LT,cx,ry+2,step-4,4)
+
+def draw_hills(surf, offset, night):
+    c1=HILL_C if not night else (0,50,0)
+    c2=HILL_D if not night else (0,36,0)
+    ct=HILL_T if not night else (0,64,0)
+    hx_start = int(-(offset*0.25) % 340) - 340   # ← wrap in int()
+    for hx in range(hx_start, W+340, 340):
+        pygame.draw.ellipse(surf,c1,(hx,GROUND_Y-58,180,72))
+        pygame.draw.ellipse(surf,ct,(hx+10,GROUND_Y-56,160,28))
+        pygame.draw.ellipse(surf,c2,(hx+165,GROUND_Y-40,130,52))
+
+def draw_cloud(surf, x, y):
+    for cx,cy,cr in [(x+16,y+20,18),(x+32,y+10,24),(x+56,y+7,27),(x+80,y+10,22),(x+96,y+20,16)]:
+        pygame.draw.circle(surf,CLOUD_W,(int(cx),int(cy)),cr)
+        pygame.draw.circle(surf,CLOUD_SH,(int(cx),int(cy)+cr-4),cr//3)
+    p(surf,CLOUD_W,x+2,y+20,112,18); p(surf,CLOUD_SH,x+2,y+30,112,8)
+
+def draw_stars_moon(surf, stars, moon_x):
+    for sx,sy,ss in stars: pygame.draw.circle(surf,STAR_C,(sx,sy),ss)
+    mx=int(moon_x)
+    pygame.draw.circle(surf,MOON_C,(mx,52),28)
+    pygame.draw.circle(surf,SKY_NIGHT,(mx+14,47),24)
+
+def draw_coin_hud(surf, x, y):
+    pygame.draw.circle(surf,COIN_Y,(x,y),9)
+    pygame.draw.circle(surf,COIN_D,(x+3,y),6)
+
+def shadow_text(surf, font, text, color, x, y):
+    surf.blit(font.render(text,True,SCORE_SH),(x+2,y+2))
+    surf.blit(font.render(text,True,color),(x,y))
+
+# ─────────────────────────────────────────────────────────────
+# START SCREEN
+# ─────────────────────────────────────────────────────────────
+def draw_start_screen(surf, frame, hi):
+    # Background sky
+    surf.fill(SKY_DAY)
+    draw_hills(surf, 0, False)
+    draw_cloud(surf, 120, 40)
+    draw_cloud(surf, 500, 60)
+    draw_cloud(surf, 720, 30)
+    draw_ground(surf, 0)
+
+    # Panel
+    panel = pygame.Surface((560, 260), pygame.SRCALPHA)
+    panel.fill((0, 0, 0, 170))
+    surf.blit(panel, (W//2-280, H//2-140))
+
+    # Title with bounce
+    bounce = int(math.sin(frame * 0.07) * 6)
+    shadow_text(surf, font_big, "MARIO JUMP", (252,48,48), W//2-130, H//2-120+bounce)
+
+    # Subtitle
+    shadow_text(surf, font_med, "A Dino-Jump-Style endless runner", (220,220,252), W//2-180, H//2-70)
+
+    # Controls list
+    controls = [
+        ("SPACE / UP / W", "Jump (press again = double jump)"),
+        ("DOWN  (in air)", "Fast fall"),
+        ("S / DOWN",       "Duck"),
+        ("DOWN  (on brick)","Drop through"),
+    ]
+    for i,(key,desc) in enumerate(controls):
+        shadow_text(surf,font_sm,f"{key:<18} {desc}",(180,220,252),W//2-190,H//2-30+i*22)
+
+    # High score
+    if hi > 0:
+        shadow_text(surf,font_med,f"BEST  {hi:05d}",(252,218,80),W//2-70,H//2+66)
+
+    # Blinking press start
+    if (frame//22)%2==0:
+        shadow_text(surf,font_med,"PRESS  SPACE  TO  START",(252,252,252),W//2-135,H//2+96)
+
+    # Draw idle Mario on the start screen
+    draw_mario(surf, W//2-30, GROUND_Y-66, False, False, frame)
+
+# ─────────────────────────────────────────────────────────────
+# POPUPS
+# ─────────────────────────────────────────────────────────────
+popups = []
+def add_popup(x, y, text, color):
+    popups.append({"x":float(x),"y":float(y),"text":text,"color":color,"life":45})
+
+# ─────────────────────────────────────────────────────────────
+# GAME STATE
+# ─────────────────────────────────────────────────────────────
+def new_game(hi):
+    return {
+        "mx":80,"my":float(GROUND_Y-66),
+        "mvy":0.0,"on_ground":True,"ducking":False,"airborne":False,
+        "jumps_left":2,        # double jump counter (2 = can jump twice)
+        "on_brick":False,"brick_platform_y":None,
+        "obstacles":[],
+        "clouds":[{"x":float(random.randint(0,W)),"y":float(random.randint(30,130))} for _ in range(5)],
+        "ground_off":0,
+        "hill_off":0.0,
+        "score":0.0,"coins":0,"hi":hi,
+        "speed":6.0,"frame":0,
+        "over":False,"flash":0,
+        "night":False,"transition":0,
+        "next_night":random.randint(200,500),
+        "stars":[(random.randint(0,W),random.randint(10,GROUND_Y-30),random.randint(1,3)) for _ in range(55)],
+        "moon_x":float(W-100),
+        "spawn_t":300,         # longer first gap so player can settle in
+    }
+
+hi_score = 0
+state    = new_game(0)
+game_phase = "start"   # "start" | "play"
+start_frame = 0
+
+# ─────────────────────────────────────────────────────────────
+# OBSTACLE SPAWNER  — difficulty scales with score, fewer at extremes
+# ─────────────────────────────────────────────────────────────
+def spawn_obstacle(state):
+    sc = int(state["score"])
+    pool = []
+
+    # ── early game (0-80): only simple short pipes ──────────
+    if sc < 40:
+        pool = [("pipe",0,0),("pipe",0,0),("pipe",1,0)]   # only short narrow pipes
+
+    # ── building up (40-150): wider + taller pipes + goombas ─
+    elif sc < 150:
+        for wc in range(2):
+            pool.append(("pipe",wc,0))
+        if sc > 60:
+            pool += [("goomba",0,0)]*3
+        if sc > 90:
+            pool.append(("pipe",0,1))
+
+    # ── mid game (150-400): full variety ────────────────────
+    elif sc < 400:
+        for wc in range(3):
+            for hc in range(2):
+                pool.append(("pipe",wc,hc))
+        pool += [("goomba",0,0)]*3
+        if sc > 110: pool += [("shell",0,0)]*2
+        if sc > 150: pool += [("bullet",0,0)]*2
+        for wc in range(3):
+            if sc > 40: pool += [("piranha",wc,0)]*2
+        if sc > 100:
+            for cnt in range(3,6):
+                pool.append(("fbrick",cnt,0))
+                pool.append(("fbrick",cnt,1))
+
+    # ── late game (400+): speed is the main challenge, fewer obstacles ─
+    else:
+        # Shrink pool back — mostly simpler obstacles + speed
+        pool = [("pipe",0,0)]*3+[("pipe",1,0)]*2+[("goomba",0,0)]*2
+        pool += [("bullet",0,0)]*2+[("shell",0,0)]
+        pool += [("fbrick",2,0),("fbrick",3,0),("fbrick",2,1)]
+        if sc > 600:
+            pool += [("piranha",0,0)]*2   # re-add piranhas at very high score
+
+    kind,a,b = random.choice(pool)
+
+    if kind=="pipe":
+        return {"kind":"pipe","x":float(W+20),"wc":a,"hc":b}
+    elif kind=="piranha":
+        return {"kind":"piranha","x":float(W+20),"wc":a,"hc":b}
+    elif kind=="goomba":
+        return {"kind":"goomba","x":float(W+20),"y":float(GROUND_Y-56)}
+    elif kind=="shell":
+        return {"kind":"shell","x":float(W+20),"y":float(GROUND_Y-KSC*12-4)}
+    elif kind=="bullet":
+        fly_y=float(GROUND_Y-bullet_bill_height()-random.randint(10,120))
+        return {"kind":"bullet","x":float(W+40),"y":fly_y}
+    else:
+        brick_y=(GROUND_Y-100) if b==0 else (GROUND_Y-148)
+        count=a
+        collected=[True] * count
+    if random.random() < 0.5:
+        lucky = random.randint(0, count-1)
+        collected[lucky] = False
+    return {"kind":"fbrick","x":float(W+20),"y":float(brick_y),"count":count,"collected":collected}
+
+# ─────────────────────────────────────────────────────────────
+# SPAWN INTERVAL — longer gaps at very early and very late game
+# ─────────────────────────────────────────────────────────────
+def next_spawn_time(sc):
+    if sc < 30:
+        return float(random.randint(800, 1200))   # very sparse early
+    elif sc < 100:
+        return float(random.randint(650, 950))
+    elif sc < 400:
+        return float(random.randint(550, 800))    # mid-game still has breathing room
+    else:
+        return float(random.randint(700, 1000))   # late game: wide gaps, speed is the challenge
+
+# ─────────────────────────────────────────────────────────────
+# MAIN LOOP
+# ─────────────────────────────────────────────────────────────
+while True:
+    clock.tick(FPS)
+
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            pygame.quit(); sys.exit()
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                pygame.quit(); sys.exit()
+
+            # ── Start screen ──────────────────────────────────
+            if game_phase == "start":
+                if event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_UP):
+                    game_phase = "play"
+                    state = new_game(hi_score)
+                    pygame.mixer.music.rewind()
+                    pygame.mixer.music.play(-1)
+                    popups.clear()
+
+            # ── Game over restart ─────────────────────────────
+            elif state["over"]:
+                if event.key in (pygame.K_SPACE, pygame.K_RETURN, pygame.K_UP):
+                    hi_score=max(hi_score,int(state["score"]))
+                    saved_coins = state["coins"]  
+                    popups.clear(); state=new_game(hi_score)
+                    state["coins"] = saved_coins  
+                    pygame.mixer.music.rewind()     
+                    pygame.mixer.music.play(-1) 
+
+            # ── In-game controls ──────────────────────────────
+            else:
+                if event.key in (pygame.K_SPACE, pygame.K_UP, pygame.K_w):
+                    can_jump = state["on_ground"] or state["on_brick"] or state["jumps_left"] > 0
+                    if can_jump:
+                        state["mvy"]      = JUMP_V
+                        state["airborne"] = True
+                        state["ducking"]  = False
+                        if state["on_ground"] or state["on_brick"]:
+                            state["jumps_left"] = 1   # used first jump; 1 double-jump remaining
+                            sfx_jump.play()
+                        else:
+                            state["jumps_left"] -= 1  # used double jump
+                            sfx_jump2.play()
+                        state["on_ground"] = False
+                        state["on_brick"]  = False
+
+                if event.key == pygame.K_DOWN:
+                    if not state["on_ground"] and not state["on_brick"]:
+                        state["mvy"] = max(state["mvy"], 5)
+                    elif state["on_brick"]:
+                        state["on_brick"]=False; state["mvy"]=2.0
+
+    keys = pygame.key.get_pressed()
+
+    # ── START SCREEN DRAW ─────────────────────────────────────
+    if game_phase == "start":
+        start_frame += 1
+        draw_start_screen(screen, start_frame, hi_score)
+        pygame.display.flip()
+        continue
+
+    # ── DUCK (hold) ───────────────────────────────────────────
+    if not state["over"]:
+        state["ducking"] = (keys[pygame.K_DOWN] or keys[pygame.K_s]) and state["on_ground"]
+
+    # ── UPDATE ────────────────────────────────────────────────
+    if not state["over"]:
+        if not state["on_brick"]:
+            state["mvy"] += GRAVITY
+        state["my"] += state["mvy"]
+
+        floor_y = GROUND_Y-(DUCK_H+28 if state["ducking"] else 66)
+        if state["my"] >= floor_y:
+            state["my"]=float(floor_y); state["mvy"]=0.0
+            state["on_ground"]=True; state["on_brick"]=False
+            state["airborne"]=False; state["jumps_left"]=2   # reset jumps on ground
+
+        prev_sc = int(state["score"])
+        state["score"] += state["speed"]*0.02
+        state["speed"]  = min(6.0+int(state["score"])//150*0.5, 20.0)
+        state["frame"] += 1
+        sc = int(state["score"])
+
+        if sc // 100 > prev_sc // 100:         
+            sfx_milestone.play()
+            add_popup(W//2 - 60, H//2 - 60, f"{sc} POINTS!", (252, 218, 80))
+
+        if sc >= state["next_night"] and state["transition"]==0:
+            state["transition"]=60
+        if state["transition"]>0:
+            state["transition"]-=1
+            if state["transition"]==0:
+                state["night"]=not state["night"]
+                state["next_night"]=sc+random.randint(280,650)
+
+        state["ground_off"]=(state["ground_off"]+int(state["speed"]))%36
+        state["hill_off"]=(state["hill_off"]+state["speed"]*0.25)%(340*4)
+        state["moon_x"]-=state["speed"]*0.25
+        if state["moon_x"]<-50: state["moon_x"]=float(W+50)
+        for c in state["clouds"]:
+            c["x"]-=state["speed"]*0.35
+            if c["x"]<-150:
+                c["x"]=float(W+random.randint(0,80)); c["y"]=float(random.randint(30,130))
+
+        state["spawn_t"]-=state["speed"]
+        if state["spawn_t"]<=0:
+            state["spawn_t"]=next_spawn_time(sc)
+            state["obstacles"].append(spawn_obstacle(state))
+
+        state["obstacles"]=[o for o in state["obstacles"] if o["x"]>-300]
+        for o in state["obstacles"]:
+            o["x"]-=state["speed"]
+
+        # ── Brick stepping + coin collection ─────────────────
+        mario_r    = mario_rect(state["mx"],int(state["my"]),state["ducking"])
+        mario_feet = mario_r.bottom
+        mario_cx   = mario_r.centerx
+
+        was_on_brick = state["on_brick"]
+        state["on_brick"]=False; state["brick_platform_y"]=None
+
+        for o in state["obstacles"]:
+            if o["kind"]=="fbrick":
+                ox=int(o["x"])
+                br=flying_bricks_rect(ox,int(o["y"]),o["count"])
+                brick_top=int(o["y"])
+
+                if (mario_cx>=br.left and mario_cx<=br.right and
+                    state["mvy"]>=0 and
+                    mario_feet>=brick_top and mario_feet<=brick_top+18+abs(state["mvy"])+4):
+                    mario_height=DUCK_H if state["ducking"] else 66
+                    state["my"]=float(brick_top-mario_height-S)
+                    state["mvy"]=0.0; state["on_brick"]=True; sfx_land.play()
+                    state["brick_platform_y"]=brick_top
+                    state["airborne"]=False; state["jumps_left"]=2  # reset jumps on brick
+
+                for i in range(o["count"]):
+                    if not o["collected"][i]:
+                        cr=coin_rect_at(ox,int(o["y"]),i)
+                        if mario_r.inflate(4,4).colliderect(cr):
+                            o["collected"][i]=True; state["coins"]+=1
+                            sfx_coin.play()
+                            add_popup(ox+i*BW+BW//2,int(o["y"])-24,"+COIN",COIN_Y)
+
+        if state["on_brick"]:
+            still_on=any(
+                o["kind"]=="fbrick" and
+                mario_cx>=flying_bricks_rect(int(o["x"]),int(o["y"]),o["count"]).left and
+                mario_cx<=flying_bricks_rect(int(o["x"]),int(o["y"]),o["count"]).right
+                for o in state["obstacles"]
+            )
+            if not still_on: state["on_brick"]=False
+
+        # ── Collision (harm) ──────────────────────────────────
+        mr=mario_rect(state["mx"],int(state["my"]),state["ducking"])
+        hit=False
+        for o in state["obstacles"]:
+            ox=int(o["x"])
+            if o["kind"] in ("pipe","piranha"):
+                hr=pipe_rect(ox,o["wc"],o["hc"]).inflate(-6,-4)
+                if mr.colliderect(hr): hit=True; break
+                if o["kind"]=="piranha":
+                    ptop=pipe_cap_top(ox,o["wc"],o["hc"])
+                    phr=piranha_rect(ox,ptop,state["frame"],o["wc"],o["hc"]).inflate(-4,-4)
+                    if mr.colliderect(phr): hit=True; break
+            elif o["kind"]=="goomba":
+                if mr.colliderect(goomba_rect(o["x"],o["y"]).inflate(-6,-4)): hit=True; break
+            elif o["kind"]=="shell":
+                if mr.colliderect(koopa_rect(o["x"],o["y"]).inflate(-6,-4)): hit=True; break
+            elif o["kind"]=="bullet":
+                if mr.colliderect(bullet_bill_rect(o["x"],o["y"]).inflate(-4,-4)): hit=True; break
+            elif o["kind"]=="fbrick":
+                ox2=int(o["x"]); br=flying_bricks_rect(ox2,int(o["y"]),o["count"])
+                side_rect=pygame.Rect(br.left-4,br.top+4,8,br.height-8)
+                if mr.colliderect(side_rect) and not state["on_brick"]: hit=True; break
+
+        if hit:
+            hi_score=max(hi_score,sc); state["hi"]=hi_score
+            pygame.mixer.music.pause()
+           # ✅ Correct
+            state["over"]=True; state["flash"]=14
+            pygame.mixer.music.stop() 
+            for snd in sfx_death:
+                snd.play()
+
+    for pp in popups:
+        pp["y"]-=1.2; pp["life"]-=1
+    popups[:]=[pp for pp in popups if pp["life"]>0]
+
+    # ── DRAW ─────────────────────────────────────────────────
+    sky=SKY_NIGHT if state["night"] else SKY_DAY
+    if state["transition"]>0:
+        t=1-state["transition"]/60
+        src=SKY_DAY if not state["night"] else SKY_NIGHT
+        dst=SKY_NIGHT if not state["night"] else SKY_DAY
+        sky=tuple(int(src[i]+(dst[i]-src[i])*t) for i in range(3))
+    screen.fill(sky)
+
+    if state["night"] or state["transition"]>0:
+        draw_stars_moon(screen,state["stars"],state["moon_x"])
+    draw_hills(screen,state["hill_off"],state["night"])
+    if not state["night"]:
+        for c in state["clouds"]: draw_cloud(screen,int(c["x"]),int(c["y"]))
+    draw_ground(screen,state["ground_off"])
+
+    for o in state["obstacles"]:
+        ox=int(o["x"])
+        if o["kind"] in ("pipe","piranha"): draw_pipe(screen,ox,o["wc"],o["hc"])
+    for o in state["obstacles"]:
+        ox=int(o["x"])
+        if o["kind"]=="piranha":
+            ptop=pipe_cap_top(ox,o["wc"],o["hc"])
+            draw_piranha(screen,ox,ptop,state["frame"],o["wc"],o["hc"])
+        elif o["kind"]=="goomba": draw_goomba(screen,o["x"],o["y"],state["frame"])
+        elif o["kind"]=="shell":  draw_koopa(screen,o["x"],o["y"],state["frame"])
+        elif o["kind"]=="fbrick": draw_flying_bricks(screen,ox,int(o["y"]),o["count"],o["collected"])
+        elif o["kind"]=="bullet": draw_bullet_bill(screen,o["x"],o["y"])
+
+    draw_mario(screen,state["mx"],int(state["my"]),state["ducking"],state["airborne"],state["frame"])
+
+    for pp in popups:
+        screen.blit(font_sm.render(pp["text"],True,pp["color"]),(int(pp["x"]),int(pp["y"])))
+
+    # HUD
+    shadow_text(screen,font_med,f"SCORE  {int(state['score']):05d}",(252,252,252),W-242,12)
+    shadow_text(screen,font_med,f"BEST   {state['hi']:05d}",(252,218,80),W-242,34)
+    draw_coin_hud(screen,28,22)
+    shadow_text(screen,font_med,f"x{state['coins']:02d}",COIN_Y,42,14)
+    # Double jump indicator
+    if state["night"]:
+        shadow_text(screen,font_sm,"* NIGHT *",(172,172,252),W//2-42,10)
+
+    if state["over"]:
+        if state["flash"]>0:
+            if state["flash"]%3<2:
+                fs=pygame.Surface((W,H),pygame.SRCALPHA); fs.fill((*FLASH_C,92))
+                screen.blit(fs,(0,0))
+            state["flash"]-=1
+        panel=pygame.Surface((450,170),pygame.SRCALPHA); panel.fill((0,0,0,168))
+        screen.blit(panel,(W//2-225,H//2-90))
+        shadow_text(screen,font_big,"GAME OVER",(252,48,48),W//2-100,H//2-78)
+        shadow_text(screen,font_med,f"Score:{int(state['score'])}  Best:{state['hi']}",(252,216,80),W//2-150,H//2-30)
+        shadow_text(screen,font_med,"SPACE / UP  to play again",(252,252,252),W//2-152,H//2+10)
+
+    pygame.display.flip()
